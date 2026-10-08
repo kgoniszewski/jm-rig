@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-tests:
+    name: Linux (engine tests + compile check)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install JUCE dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libjack-jackd2-dev ladspa-sdk \
+            libfreetype-dev libfontconfig1-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev \
+            libxrandr-dev libxrender-dev libxi-dev \
+            libglu1-mesa-dev mesa-common-dev libegl-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --target JMRigTests JMRig_Standalone -j4
+
+      - name: Engine tests
+        run: ctest --test-dir build --output-on-failure
+
+  macos:
+    name: macOS (AU, AUv3, Standalone, universal)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Configure
+        run: cmake -S . -B build -G Xcode
+
+      - name: Build plugin
+        run: cmake --build build --config Release --target JMRig_All -- CODE_SIGNING_ALLOWED=NO
+
+      - name: Build and run engine tests
+        run: |
+          cmake --build build --config Release --target JMRigTests -- CODE_SIGNING_ALLOWED=NO
+          ctest --test-dir build -C Release --output-on-failure
+
+      - name: Check binaries are universal
+        run: |
+          lipo -info "build/JMRig_artefacts/Release/AU/JM Rig.component/Contents/MacOS/JM Rig"
+          lipo -info "build/JMRig_artefacts/Release/Standalone/JM Rig.app/Contents/MacOS/JM Rig"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JMRig-macOS-unsigned
+          path: |
+            build/JMRig_artefacts/Release/AU
+            build/JMRig_artefacts/Release/Standalone
+          retention-days: 7
+
+  ipados:
+    name: iPadOS (AUv3 + Standalone app)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Configure
+        run: cmake -S . -B build-ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0
+
+      - name: Build for device (unsigned)
+        run: cmake --build build-ios --config Release --target JMRig_All -- -sdk iphoneos CODE_SIGNING_ALLOWED=NO
