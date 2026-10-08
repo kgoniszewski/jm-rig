@@ -3,7 +3,7 @@
 A circuit-modelled guitar amp and cab for macOS (AU, AUv3, Standalone) and iPadOS
 (AUv3 + Standalone app), built with JUCE 9.0.3 and C++20.
 
-An independent project, not affiliated with Neural DSP or John Mayer.
+An independent project, not affiliated with any trademark.
 
 ## Status
 
