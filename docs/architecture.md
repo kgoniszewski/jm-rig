@@ -47,6 +47,25 @@ Inside `processBlock()` and everything it calls:
   neither clicks nor shifts timing. `processBlockBypassed()` keeps the engine
   running for the same reason.
 
+## Cab
+
+- Two `juce::dsp::Convolution` engines (slots A and B) sharing one background
+  loader queue, non-uniform partitioned with a 256-sample head: zero latency
+  at any host block size, and long IRs cost little more than short ones.
+- Loading is wait-free for the audio thread. The decoder (`ImpulseDecoder`)
+  runs on the message thread, the convolution engine resamples the IR to the
+  session rate on its own thread, then crossfades it in during `process()`.
+  A test swaps an IR mid-stream and checks for allocations and clicks.
+- IRs are trimmed to 0.5 s and normalised to unit energy (white noise in,
+  same RMS out), so captures made at different levels sound equally loud.
+  Only channel 0 of a stereo file is used.
+- The processor keeps each loaded file's bytes and writes them into the
+  plugin state (`CabIRs` child, binary as base64). Sessions never depend on
+  a file path, which matters on iPadOS where an AUv3 can't reopen a path
+  from a previous launch.
+- Blend, low cut and high cut are smoothed; the filter cutoffs are
+  recomputed every 16 samples (TPT state-variable filters, Butterworth Q).
+
 ## Platforms
 
 - macOS: universal binary (arm64 + x86_64), deployment target 13.0.

@@ -18,6 +18,10 @@ namespace ParamIDs
     inline constexpr auto ampPresence = "ampPresence";
     inline constexpr auto ampMaster   = "ampMaster";
     inline constexpr auto ampBright   = "ampBright";
+    inline constexpr auto cabOn       = "cabOn";
+    inline constexpr auto cabBlend    = "cabBlend";
+    inline constexpr auto cabLowCut   = "cabLowCut";
+    inline constexpr auto cabHighCut  = "cabHighCut";
     inline constexpr auto bypass      = "bypass";
 }
 

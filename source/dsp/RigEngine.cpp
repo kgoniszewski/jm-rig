@@ -58,6 +58,7 @@ void RigEngine::setParameters (const RigParameters& p) noexcept
     outputGain.setTargetValue (dbToGain (p.outputGainDb));
     wetMix.setTargetValue (p.bypass ? 0.0f : 1.0f);
     amp.setParameters (p);
+    cab.setParameters (p);
 }
 
 void RigEngine::process (float* data, int numSamples) noexcept

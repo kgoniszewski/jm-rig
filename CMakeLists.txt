@@ -28,7 +28,8 @@ add_library(jmrig_dsp INTERFACE)
 target_sources(jmrig_dsp
     INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/RigEngine.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/AmpStage.cpp)
+        ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/AmpStage.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/CabStage.cpp)
 
 target_include_directories(jmrig_dsp INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/source)
 target_link_libraries(jmrig_dsp INTERFACE juce::juce_dsp)
