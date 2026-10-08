@@ -7,9 +7,15 @@ An independent project, not affiliated with any trademark.
 
 ## Status
 
-**0.2.0: cab.** The signal chain, parameters, oversampling, latency reporting
-and builds are in place, and the cab plays your own impulse responses. The amp is
-still a placeholder soft clipper until step 3.
+**0.3.0: amp.** A circuit-modelled, Dumble/Two-Rock-style clean amp into a cab
+that plays your own impulse responses.
+
+The amp is modelled stage by stage: two 12AX7 gain stages solved from Koren's
+tube equations on their load lines, the bass/mid/treble tone stack solved exactly
+from its circuit, the Gain pot with its bright cap, and a push-pull power section
+with supply sag, presence and output transformer. It stays clean at low Gain and
+breaks up as Gain rises, the way the real circuit does (about 1% THD at Gain 2,
+15% at 8, 33% at 10 for a single-coil level signal).
 
 The cab has two IR slots (A and B) with a blend, a low cut, a high cut and an
 on/off switch. Load WAV, AIFF or FLAC files up to 0.5 s at any sample rate. Each IR
@@ -26,9 +32,10 @@ dry, delayed by the reported latency -------------- bypass crossfade
 ## Roadmap
 
 1. **Skeleton** (done): CMake project, headless engine, AU/AUv3/Standalone, CI.
-2. **Cab** (this): zero-latency IR convolution for your own IRs, A/B blend, low/high cut.
-3. **Amp**: Dumble/Two-Rock-style clean amp. WDF tone stack, fitted 12AX7 and
-   power-amp stages. Gain, Bass, Mid, Treble, Presence, Master, Bright.
+2. **Cab** (done): zero-latency IR convolution for your own IRs, A/B blend, low/high cut.
+3. **Amp** (this): Dumble/Two-Rock-style clean amp. Circuit-exact tone stack,
+   12AX7 stages on their load lines, power amp with sag. Gain, Bass, Mid,
+   Treble, Presence, Master, Bright.
 4. **Tune and test**: null tests against SPICE renders, iPad CPU profiling, UI.
 
 ## Building

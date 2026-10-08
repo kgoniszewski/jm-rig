@@ -47,6 +47,30 @@ Inside `processBlock()` and everything it calls:
   neither clicks nor shifts timing. `processBlockBypassed()` keeps the engine
   running for the same reason.
 
+## Amp
+
+All of it runs inside the 4x oversampler, in volts from the guitar input to
+V1B's plate, so clipping starts where it does in the circuit.
+
+| Stage | Model |
+|---|---|
+| Grid stopper + Miller capacitance | 1-pole low-pass, 18 kHz |
+| V1A, V1B (12AX7, Rp 100k, Rk 1.5k bypassed, B+ 250 V) | `TriodeStage`: Koren plate current, load line solved by bisection for 4097 grid voltages at startup, linear interpolation at run time. Grid conduction soft-limits positive Vgk. Operating point 170 V plate, 1.2 V cathode, gain 61 |
+| Coupling caps | DC blockers |
+| Tone stack | `ToneStack`: exact third-order transfer function of the netlist (coefficients derived symbolically, verified in tests against a numeric nodal solve to 1e-9 dB), bilinear transform, recomputed every 32 samples while knobs move |
+| Gain pot (1M audio taper) + 120 pF bright cap | Exact first-order divider; the bright lift fades as the pot opens, as on the amp |
+| Phase inverter, output pair, transformer, feedback | `PowerAmp`: symmetric soft clip scaled by sag headroom (8 ms attack, 180 ms recovery, up to 2.5 dB), presence shelf (0 to +8 dB at 3.5 kHz), speaker resonance shelf (+2.5 dB at 90 Hz), 35 Hz transformer high-pass |
+
+Coefficient math is allocation-free: JUCE's IIR coefficient factories
+allocate, so `amp/Filters.h` has small first-order and shelf sections.
+
+The tone stack values are an ODS-style stack as commonly published by clone
+builders (250k treble, 1M bass, 25k mid, 100k slope, 250 pF, 22 nF, 22 nF),
+voiced rather than measured. Step 4 compares the whole amp against SPICE.
+
+On this CI-class x86 container, the whole rig (amp, both IR slots, filters)
+runs at about 40x real time at 48 kHz with 64-sample blocks (`testCpuBudget`).
+
 ## Cab
 
 - Two `juce::dsp::Convolution` engines (slots A and B) sharing one background
