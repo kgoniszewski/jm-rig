@@ -36,6 +36,17 @@ public:
 
     bool isPrepared() const noexcept { return maxBlock > 0; }
 
+    /** Message or loader thread; wait-free with respect to process(). */
+    void loadImpulseResponse (CabStage::Slot slot, juce::AudioBuffer<float> impulse, double impulseSampleRate,
+                              bool normalise = true)
+    {
+        cab.loadImpulseResponse (slot, std::move (impulse), impulseSampleRate, normalise);
+    }
+
+    void loadDefaultImpulseResponse (CabStage::Slot slot) { cab.loadDefaultImpulseResponse (slot); }
+
+    int getCurrentImpulseSize (CabStage::Slot slot) const { return cab.getCurrentImpulseSize (slot); }
+
 private:
     void processChunk (float* data, int numSamples) noexcept;
 

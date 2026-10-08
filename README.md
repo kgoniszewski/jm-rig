@@ -7,9 +7,15 @@ An independent project, not affiliated with Neural DSP or John Mayer.
 
 ## Status
 
-**0.1.0: skeleton.** The signal chain, parameters, oversampling, latency reporting
-and builds are in place. The amp is a placeholder soft clipper and the cab is a
-pass-through; both get replaced by real models (see the roadmap).
+**0.2.0: cab.** The signal chain, parameters, oversampling, latency reporting
+and builds are in place, and the cab plays your own impulse responses. The amp is
+still a placeholder soft clipper until step 3.
+
+The cab has two IR slots (A and B) with a blend, a low cut, a high cut and an
+on/off switch. Load WAV, AIFF or FLAC files up to 0.5 s at any sample rate. Each IR
+is normalised to the same loudness, and the file itself is saved inside your
+session, so it comes back on another computer or inside the iPad's AUv3 sandbox.
+With no IR loaded, a built-in generic 1x12 response is used.
 
 ```
 input gain -> DC block -> amp (4x oversampled) -> cab -> output gain
@@ -19,8 +25,8 @@ dry, delayed by the reported latency -------------- bypass crossfade
 
 ## Roadmap
 
-1. **Skeleton** (this): CMake project, headless engine, AU/AUv3/Standalone, CI.
-2. **Cab**: low-latency IR convolution for your own IRs, mic blend, low/high cut.
+1. **Skeleton** (done): CMake project, headless engine, AU/AUv3/Standalone, CI.
+2. **Cab** (this): zero-latency IR convolution for your own IRs, A/B blend, low/high cut.
 3. **Amp**: Dumble/Two-Rock-style clean amp. WDF tone stack, fitted 12AX7 and
    power-amp stages. Gain, Bass, Mid, Treble, Presence, Master, Bright.
 4. **Tune and test**: null tests against SPICE renders, iPad CPU profiling, UI.
@@ -53,6 +59,14 @@ Engine tests (any platform):
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target JMRigTests && ctest --test-dir build
+```
+
+To also run every `.wav` in a folder through the real IR path (decode, load,
+play, check for allocations), point `JMRIG_IR_DIR` at it. IRs are not kept in
+this repo.
+
+```sh
+JMRIG_IR_DIR=~/IRs ./build/JMRigTests_artefacts/Release/JMRigTests
 ```
 
 ## Layout

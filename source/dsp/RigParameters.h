@@ -20,6 +20,12 @@ struct RigParameters
     float ampMaster   = 5.0f;
     bool  ampBright   = false;
 
+    // Cab.
+    bool  cabOn        = true;
+    float cabBlend     = 0.0f;      // 0 = IR A only, 1 = IR B only
+    float cabLowCutHz  = 20.0f;
+    float cabHighCutHz = 20000.0f;
+
     bool bypass = false;
 };
 

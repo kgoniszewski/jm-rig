@@ -26,6 +26,10 @@ PluginProcessor::PluginProcessor()
     raw.ampPresence = get (ParamIDs::ampPresence);
     raw.ampMaster   = get (ParamIDs::ampMaster);
     raw.ampBright   = get (ParamIDs::ampBright);
+    raw.cabOn       = get (ParamIDs::cabOn);
+    raw.cabBlend    = get (ParamIDs::cabBlend);
+    raw.cabLowCut   = get (ParamIDs::cabLowCut);
+    raw.cabHighCut  = get (ParamIDs::cabHighCut);
     raw.bypass      = get (ParamIDs::bypass);
 }
 
@@ -77,6 +81,10 @@ RigParameters PluginProcessor::readParameters (bool forceBypass) const noexcept
     p.ampPresence  = load (raw.ampPresence);
     p.ampMaster    = load (raw.ampMaster);
     p.ampBright    = load (raw.ampBright) >= 0.5f;
+    p.cabOn        = load (raw.cabOn) >= 0.5f;
+    p.cabBlend     = load (raw.cabBlend);
+    p.cabLowCutHz  = load (raw.cabLowCut);
+    p.cabHighCutHz = load (raw.cabHighCut);
     p.bypass       = forceBypass || load (raw.bypass) >= 0.5f;
     return p;
 }
@@ -140,17 +148,98 @@ juce::AudioProcessorEditor* PluginProcessor::createEditor()
     return new PluginEditor (*this);
 }
 
+namespace
+{
+    const juce::Identifier irsTag ("CabIRs"), irTag ("IR"), slotProp ("slot"), nameProp ("name"), dataProp ("data");
+
+    const char* slotKey (CabStage::Slot s) { return s == CabStage::Slot::a ? "a" : "b"; }
+}
+
 void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    if (auto xml = apvts.copyState().createXml())
+    auto state = apvts.copyState();
+    state.removeChild (state.getChildWithName (irsTag), nullptr);
+    state.appendChild (createIrState(), nullptr);
+
+    if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
 
 void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    if (auto xml = getXmlFromBinary (data, sizeInBytes))
-        if (xml->hasTagName (apvts.state.getType()))
-            apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    auto xml = getXmlFromBinary (data, sizeInBytes);
+
+    if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()))
+        return;
+
+    auto state = juce::ValueTree::fromXml (*xml);
+    const auto irs = state.getChildWithName (irsTag);
+    state.removeChild (irs, nullptr);
+
+    apvts.replaceState (state);
+    restoreIrState (irs);
+}
+
+//==============================================================================
+juce::String PluginProcessor::loadImpulseResponse (IrSlot slot, juce::MemoryBlock fileData, const juce::String& name)
+{
+    auto decoded = decoder.decode (fileData);
+
+    if (! decoded.ok())
+        return decoded.error;
+
+    engine.loadImpulseResponse (slot, std::move (decoded.impulse), decoded.sampleRate);
+
+    const juce::ScopedLock sl (irLock);
+    stored (slot) = { name, std::move (fileData) };
+    return {};
+}
+
+void PluginProcessor::clearImpulseResponse (IrSlot slot)
+{
+    engine.loadDefaultImpulseResponse (slot);
+
+    const juce::ScopedLock sl (irLock);
+    stored (slot) = {};
+}
+
+juce::String PluginProcessor::getImpulseResponseName (IrSlot slot) const
+{
+    const juce::ScopedLock sl (irLock);
+    return stored (slot).name;
+}
+
+juce::ValueTree PluginProcessor::createIrState() const
+{
+    juce::ValueTree irs (irsTag);
+    const juce::ScopedLock sl (irLock);
+
+    for (auto slot : { IrSlot::a, IrSlot::b })
+    {
+        const auto& ir = stored (slot);
+
+        if (ir.data.isEmpty())
+            continue;
+
+        irs.appendChild (juce::ValueTree (irTag, { { slotProp, slotKey (slot) },
+                                                   { nameProp, ir.name },
+                                                   { dataProp, juce::var (ir.data) } }),
+                         nullptr);
+    }
+
+    return irs;
+}
+
+void PluginProcessor::restoreIrState (const juce::ValueTree& irs)
+{
+    for (auto slot : { IrSlot::a, IrSlot::b })
+    {
+        const auto ir = irs.getChildWithProperty (slotProp, slotKey (slot));
+        const auto* block = ir.isValid() ? ir[dataProp].getBinaryData() : nullptr;
+
+        if (block == nullptr || ! loadImpulseResponse (slot, *block, ir[nameProp].toString()).isEmpty())
+            clearImpulseResponse (slot);
+    }
 }
 
 } // namespace jmrig

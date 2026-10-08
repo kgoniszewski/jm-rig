@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "dsp/ImpulseDecoder.h"
 #include "dsp/RigEngine.h"
 #include "ParameterLayout.h"
 
@@ -48,9 +49,42 @@ public:
 
     juce::AudioProcessorValueTreeState& getValueTreeState() noexcept { return apvts; }
 
+    //==========================================================================
+    // Cab IRs. Message thread (or the host's state thread); never the audio
+    // thread. The raw file bytes are kept and saved inside the session, so a
+    // session reopens with its IRs even where the original file is out of
+    // reach (the iPad AUv3 sandbox, another computer).
+    using IrSlot = CabStage::Slot;
+
+    /** Decodes a WAV/AIFF/FLAC file's bytes and loads it. Returns an error
+        message, or an empty string on success. */
+    juce::String loadImpulseResponse (IrSlot slot, juce::MemoryBlock fileData, const juce::String& name);
+
+    /** Back to the built-in generic cab. */
+    void clearImpulseResponse (IrSlot slot);
+
+    /** Empty when the slot uses the built-in cab. */
+    juce::String getImpulseResponseName (IrSlot slot) const;
+
 private:
     void render (juce::AudioBuffer<float>& buffer, bool forceBypass) noexcept;
     RigParameters readParameters (bool forceBypass) const noexcept;
+
+    struct StoredIr
+    {
+        juce::String name;
+        juce::MemoryBlock data;
+    };
+
+    StoredIr& stored (IrSlot slot) noexcept { return slot == IrSlot::a ? irA : irB; }
+    const StoredIr& stored (IrSlot slot) const noexcept { return slot == IrSlot::a ? irA : irB; }
+
+    juce::ValueTree createIrState() const;
+    void restoreIrState (const juce::ValueTree&);
+
+    ImpulseDecoder decoder;
+    juce::CriticalSection irLock; // guards irA/irB; never taken on the audio thread
+    StoredIr irA, irB;
 
     juce::AudioProcessorValueTreeState apvts;
 
@@ -66,6 +100,10 @@ private:
         std::atomic<float>* ampPresence = nullptr;
         std::atomic<float>* ampMaster = nullptr;
         std::atomic<float>* ampBright = nullptr;
+        std::atomic<float>* cabOn = nullptr;
+        std::atomic<float>* cabBlend = nullptr;
+        std::atomic<float>* cabLowCut = nullptr;
+        std::atomic<float>* cabHighCut = nullptr;
         std::atomic<float>* bypass = nullptr;
     } raw;
 
