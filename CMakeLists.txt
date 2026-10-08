@@ -29,7 +29,10 @@ target_sources(jmrig_dsp
     INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/RigEngine.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/AmpStage.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/CabStage.cpp)
+        ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/CabStage.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/amp/PowerAmp.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/amp/ToneStack.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/amp/TriodeStage.cpp)
 
 target_include_directories(jmrig_dsp INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/source)
 target_link_libraries(jmrig_dsp INTERFACE juce::juce_dsp)

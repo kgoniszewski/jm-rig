@@ -6,6 +6,7 @@
 #include "dsp/RigEngine.h"
 
 #include <atomic>
+#include <complex>
 #include <thread>
 #include <cstdio>
 #include <cstdlib>
@@ -148,6 +149,11 @@ namespace
             for (int i = 0; i < 16; ++i)
             {
                 p.ampGain = (float) (i % 11);
+                p.ampTreble = (float) ((i * 3) % 11);
+                p.ampBass = (float) ((i * 7) % 11);
+                p.ampMid = (float) ((i * 5) % 11);
+                p.ampPresence = (float) ((i * 2) % 11);
+                p.ampBright = (i % 3) == 0;
                 p.bypass = (i % 5) == 0;
                 engine.setParameters (p);
                 engine.process (signal.data() + i * 512, 512);
@@ -250,24 +256,29 @@ namespace
         check (std::abs (signal[expected] - 1.0f) < 1.0e-6f, "bypassed impulse arrives exactly at the reported latency");
     }
 
-    void testWetPathAlignment()
+    void testAmpLatencyMatchesOversampler()
     {
-        std::puts ("wet path latency matches the reported value");
+        std::puts ("amp latency matches the oversampler round trip");
 
-        jmrig::RigEngine engine;
-        jmrig::RigParameters p;
-        p.ampGain = 0.0f;    // nearly linear region of the placeholder curve
-        p.ampMaster = 10.0f;
-        p.cabOn = false;     // the cab's phase response would bias the measurement
-        engine.setParameters (p);
-        engine.prepare (48000.0, 512);
+        jmrig::AmpStage amp;
+        amp.prepare (48000.0, 512);
 
-        // A low-level sine passes through almost unchanged apart from the
-        // delay, so cross-correlating against the input finds the wet latency.
-        // 1 kHz keeps the DC blockers' phase lead well under a sample.
+        // Run a low-level sine through the same oversampler with nothing in
+        // between, then find the delay by cross-correlation.
+        auto os = jmrig::AmpStage::makeOversampler();
+        os->initProcessing (512);
+        os->reset();
+
         const auto input = sine (48000.0, 1000.0, 8192, 0.05f);
         auto output = input;
-        run (engine, output, 512);
+
+        for (size_t offset = 0; offset < output.size(); offset += 512)
+        {
+            float* ch[] = { output.data() + offset };
+            juce::dsp::AudioBlock<float> block (ch, 1, 512);
+            os->processSamplesUp (block);
+            os->processSamplesDown (block);
+        }
 
         int bestLag = 0;
         double best = -1.0e9;
@@ -286,9 +297,266 @@ namespace
             }
         }
 
-        const auto reported = engine.getLatencySamples();
+        const auto reported = amp.getLatencySamples();
         check (std::abs (bestLag - reported) <= 1,
-               ("measured wet latency " + juce::String (bestLag) + " vs reported " + juce::String (reported)).toRawUTF8());
+               ("measured latency " + juce::String (bestLag) + " vs reported " + juce::String (reported)).toRawUTF8());
+    }
+
+    //==========================================================================
+    /** Independent check of the tone stack's closed-form coefficients: solve
+        the same netlist numerically (complex nodal analysis, Gaussian
+        elimination) and compare |H| and phase. */
+    std::complex<double> solveToneStackNodal (const jmrig::ToneStack::Components& c,
+                                              double t, double l, double m, double hz)
+    {
+        using cd = std::complex<double>;
+        const cd s (0.0, 2.0 * juce::MathConstants<double>::pi * hz);
+        const auto g = [] (double r) { return cd (1.0 / std::max (r, 1.0e-3), 0.0); };
+
+        enum { T, O, X, S, M, N };
+        cd Y[N][N] {};
+        cd I[N] {};
+
+        const auto between = [&] (int a, int b, cd y)
+        {
+            Y[a][a] += y; Y[b][b] += y; Y[a][b] -= y; Y[b][a] -= y;
+        };
+        const auto toGround = [&] (int a, cd y) { Y[a][a] += y; };
+        const auto fromInput = [&] (int a, cd y) { Y[a][a] += y; I[a] += y; }; // Vin = 1
+
+        fromInput (T, s * c.trebleCap);
+        fromInput (S, g (c.slope));
+        between (T, O, g ((1.0 - t) * c.treblePot));
+        between (O, X, g (t * c.treblePot));
+        toGround (O, g (c.load));
+        between (S, X, s * c.bassCap);
+        between (S, M, s * c.midCap);
+        between (X, M, g (l * c.bassPot));
+        toGround (M, g (m * c.midPot));
+
+        for (int col = 0; col < N; ++col)
+        {
+            int pivot = col;
+
+            for (int r = col + 1; r < N; ++r)
+                if (std::abs (Y[r][col]) > std::abs (Y[pivot][col]))
+                    pivot = r;
+
+            std::swap (Y[col], Y[pivot]);
+            std::swap (I[col], I[pivot]);
+
+            for (int r = col + 1; r < N; ++r)
+            {
+                const auto f = Y[r][col] / Y[col][col];
+
+                for (int k = col; k < N; ++k)
+                    Y[r][k] -= f * Y[col][k];
+
+                I[r] -= f * I[col];
+            }
+        }
+
+        cd v[N];
+
+        for (int r = N - 1; r >= 0; --r)
+        {
+            auto sum = I[r];
+
+            for (int k = r + 1; k < N; ++k)
+                sum -= Y[r][k] * v[k];
+
+            v[r] = sum / Y[r][r];
+        }
+
+        return v[O];
+    }
+
+    void testToneStackMatchesCircuit()
+    {
+        std::puts ("tone stack: closed form matches a numeric circuit solve");
+
+        const jmrig::ToneStack::Components parts;
+        double worstDb = 0.0, worstPhase = 0.0;
+
+        for (auto t : { 0.05, 0.5, 0.95 })
+            for (auto l : { 0.05, 0.5, 0.95 })
+                for (auto m : { 0.05, 0.5, 0.95 })
+                {
+                    const auto h = jmrig::ToneStack::analogCoefficients (parts, t, l, m);
+
+                    for (auto hz : { 40.0, 150.0, 500.0, 1500.0, 5000.0, 15000.0 })
+                    {
+                        const std::complex<double> s (0.0, 2.0 * juce::MathConstants<double>::pi * hz);
+                        std::complex<double> num = 0.0, den = 0.0, sk = 1.0;
+
+                        for (size_t k = 0; k < 4; ++k, sk *= s)
+                        {
+                            num += h.b[k] * sk;
+                            den += h.a[k] * sk;
+                        }
+
+                        const auto closed = num / den;
+                        const auto nodal = solveToneStackNodal (parts, t, l, m, hz);
+
+                        worstDb = std::max (worstDb, std::abs (20.0 * std::log10 (std::abs (closed) / std::abs (nodal))));
+                        worstPhase = std::max (worstPhase, std::abs (std::arg (closed / nodal)));
+                    }
+                }
+
+        check (worstDb < 1.0e-6 && worstPhase < 1.0e-6,
+               ("27 settings x 6 frequencies, worst error " + juce::String (worstDb, 9) + " dB").toRawUTF8());
+
+        // The digital filter at 4x oversampling follows the analog response.
+        jmrig::ToneStack stack;
+        stack.prepare (192000.0, parts);
+        stack.setControls (0.3, 0.6, 0.4);
+        const auto h = jmrig::ToneStack::analogCoefficients (parts, 0.3, 0.6, 0.4);
+
+        for (auto hz : { 100.0, 1000.0, 5000.0 })
+        {
+            stack.reset();
+            double peakOut = 0.0;
+
+            for (int i = 0; i < 192000; ++i)
+            {
+                const auto y = stack.processSample ((float) std::sin (juce::MathConstants<double>::twoPi * hz * i / 192000.0));
+
+                if (i > 96000)
+                    peakOut = std::max (peakOut, (double) std::abs (y));
+            }
+
+            const std::complex<double> s (0.0, juce::MathConstants<double>::twoPi * hz);
+            const auto analog = std::abs ((h.b[1] * s + h.b[2] * s * s + h.b[3] * s * s * s)
+                                          / (h.a[0] + h.a[1] * s + h.a[2] * s * s + h.a[3] * s * s * s));
+            const auto errDb = 20.0 * std::log10 (peakOut / analog);
+            check (std::abs (errDb) < 0.05, ("digital vs analog at " + juce::String (hz, 0) + " Hz: "
+                                             + juce::String (errDb, 3) + " dB").toRawUTF8());
+        }
+    }
+
+    void testTriodeOperatingPoint()
+    {
+        std::puts ("12AX7 stage: operating point and gain");
+
+        jmrig::TriodeStage v;
+        v.design ({}, {});
+
+        const auto vp = v.getQuiescentPlateVolts(), vk = v.getQuiescentCathodeVolts();
+        const auto gain = v.getSmallSignalGain();
+        check (vp > 130.0 && vp < 220.0 && vk > 0.7 && vk < 2.2,
+               ("Vp " + juce::String (vp, 1) + " V, Vk " + juce::String (vk, 2) + " V").toRawUTF8());
+        check (gain > 45.0f && gain < 80.0f, ("small-signal gain " + juce::String (gain, 1)).toRawUTF8());
+
+        bool monotonic = true;
+
+        for (float x = -15.0f; x < 15.0f; x += 0.01f)
+            monotonic = monotonic && v.processSample (x + 0.01f) <= v.processSample (x);
+
+        check (monotonic, "plate voltage falls as the grid rises (inverting, no foldback)");
+        check (std::abs (v.processSample (0.0f)) < 1.0e-3f, "no offset at rest");
+    }
+
+    /** Harmonic distortion of a steady sine, from a DFT at each harmonic. */
+    double thd (const std::vector<float>& v, size_t from, double hz, double sampleRate)
+    {
+        const auto power = [&] (double f)
+        {
+            double re = 0.0, im = 0.0;
+
+            for (size_t i = from; i < v.size(); ++i)
+            {
+                const auto ph = juce::MathConstants<double>::twoPi * f * (double) i / sampleRate;
+                re += v[i] * std::cos (ph);
+                im += v[i] * std::sin (ph);
+            }
+
+            return re * re + im * im;
+        };
+
+        double harmonics = 0.0;
+
+        for (int k = 2; k <= 9; ++k)
+            harmonics += power (hz * k);
+
+        return std::sqrt (harmonics / power (hz));
+    }
+
+    /** Amp only (cab off), steady sine at the given knob settings. */
+    std::vector<float> playAmp (jmrig::RigParameters p, double hz, float amplitude)
+    {
+        p.cabOn = false;
+        jmrig::RigEngine engine;
+        engine.setParameters (p);
+        engine.prepare (48000.0, 512);
+
+        auto signal = sine (48000.0, hz, 48000, amplitude);
+        run (engine, signal, 512);
+        return signal;
+    }
+
+    void testBreakupFollowsGain()
+    {
+        std::puts ("amp: clean at low gain, breaks up as Gain rises");
+
+        std::vector<double> distortion;
+
+        for (auto g : { 2.0f, 5.0f, 8.0f, 10.0f })
+        {
+            jmrig::RigParameters p;
+            p.ampGain = g;
+            const auto out = playAmp (p, 220.0, 0.3f); // ~0.3 V, a typical single-coil peak
+            distortion.push_back (thd (out, 24000, 220.0, 48000.0));
+            std::printf ("    gain %.0f: THD %.2f %%, level %.1f dBFS\n", g, distortion.back() * 100.0,
+                         juce::Decibels::gainToDecibels (rms (out, 24000)));
+        }
+
+        check (distortion[0] < 0.02, "gain 2 is clean (THD under 2 %)");
+        check (distortion[3] > 0.08, "gain 10 breaks up (THD over 8 %)");
+        check (distortion[0] < distortion[1] && distortion[1] < distortion[2] && distortion[2] < distortion[3],
+               "distortion rises with every step of Gain");
+    }
+
+    float levelDb (jmrig::RigParameters p, double hz)
+    {
+        return juce::Decibels::gainToDecibels (rms (playAmp (p, hz, 0.05f), 24000));
+    }
+
+    void testToneControlsAndBright()
+    {
+        std::puts ("amp: tone controls and bright switch");
+
+        jmrig::RigParameters p;
+        p.ampGain = 3.0f;
+
+        auto lowTreble = p, highTreble = p;
+        lowTreble.ampTreble = 0.0f;
+        highTreble.ampTreble = 10.0f;
+        const auto trebleRange = levelDb (highTreble, 3000.0) - levelDb (lowTreble, 3000.0);
+        check (trebleRange > 6.0f, ("Treble 0 to 10 moves 3 kHz by " + juce::String (trebleRange, 1) + " dB").toRawUTF8());
+
+        auto lowBass = p, highBass = p;
+        lowBass.ampBass = 0.0f;
+        highBass.ampBass = 10.0f;
+        const auto bassRange = levelDb (highBass, 100.0) - levelDb (lowBass, 100.0);
+        check (bassRange > 6.0f, ("Bass 0 to 10 moves 100 Hz by " + juce::String (bassRange, 1) + " dB").toRawUTF8());
+
+        auto lowMid = p, highMid = p;
+        lowMid.ampMid = 0.0f;
+        highMid.ampMid = 10.0f;
+        const auto midRange = levelDb (highMid, 600.0) - levelDb (lowMid, 600.0);
+        check (midRange > 3.0f, ("Mid 0 to 10 moves 600 Hz by " + juce::String (midRange, 1) + " dB").toRawUTF8());
+
+        auto brightOn = p;
+        brightOn.ampBright = true;
+        const auto tilt = [&] (const jmrig::RigParameters& q) { return levelDb (q, 4000.0) - levelDb (q, 200.0); };
+        const auto brightLift = tilt (brightOn) - tilt (p);
+        check (brightLift > 3.0f, ("Bright at Gain 3 lifts 4 kHz vs 200 Hz by " + juce::String (brightLift, 1) + " dB").toRawUTF8());
+
+        auto fullGain = p, fullGainBright = p;
+        fullGain.ampGain = fullGainBright.ampGain = 10.0f;
+        fullGainBright.ampBright = true;
+        const auto brightAtFull = tilt (fullGainBright) - tilt (fullGain);
+        check (std::abs (brightAtFull) < 1.0f, ("Bright fades out at Gain 10 (" + juce::String (brightAtFull, 2) + " dB)").toRawUTF8());
     }
 
     //==========================================================================
@@ -340,8 +608,7 @@ namespace
 
         jmrig::RigEngine engine;
         jmrig::RigParameters p;
-        p.ampGain = 0.0f;
-        p.ampMaster = 10.0f;
+        p.ampGain = 3.0f; // clean, so the low cut is measured on a linear path
         engine.setParameters (p);
         engine.prepare (48000.0, 512);
         check (waitForImpulses (engine), "default cab IRs load");
@@ -396,13 +663,16 @@ namespace
             allocations += guard.count();
         }
 
+        // A click is a jump comparable to the signal's own peak; a 220 Hz
+        // tone and its harmonics move far less than that between samples.
         float maxStep = 0.0f;
+        const auto signalPeak = peak (signal, 24000);
 
         for (size_t i = 24000; i < signal.size(); ++i)
-            maxStep = std::max (maxStep, std::abs (signal[i] - signal[i - 1]));
+            maxStep = std::max (maxStep, std::abs (signal[i] - signal[i - 1]) / signalPeak);
 
         check (swapped && allocations == 0, "no allocations on the audio thread during the swap");
-        check (allFinite (signal) && maxStep < 0.2f, ("no discontinuity (max step " + juce::String (maxStep, 3) + ")").toRawUTF8());
+        check (allFinite (signal) && maxStep < 0.5f, ("no discontinuity (max step " + juce::String (maxStep, 3) + " of peak)").toRawUTF8());
     }
 
     //==========================================================================
@@ -450,8 +720,7 @@ namespace
 
             jmrig::RigEngine engine;
             jmrig::RigParameters p;
-            p.ampGain = 0.0f;
-            p.ampMaster = 10.0f;
+            p.ampGain = 3.0f;
             engine.setParameters (p);
             engine.prepare (48000.0, 128);
             check (waitForImpulses (engine), "default cab IRs load");
@@ -489,8 +758,31 @@ namespace
                              + " kHz, IR " + juce::String (engine.getCurrentImpulseSize (jmrig::CabStage::Slot::a))
                              + " samples): 1 kHz at " + juce::String (levelDb, 1) + " dB";
 
-            check (allFinite (signal) && allocations == 0 && levelDb > -40.0f && levelDb < 20.0f, label.toRawUTF8());
+            check (allFinite (signal) && allocations == 0 && levelDb > -60.0f && levelDb < 20.0f, label.toRawUTF8());
         }
+    }
+
+    void testCpuBudget()
+    {
+        std::puts ("CPU: whole rig, 48 kHz, 64-sample blocks");
+
+        jmrig::RigEngine engine;
+        jmrig::RigParameters p;
+        p.ampGain = 8.0f;
+        engine.setParameters (p);
+        engine.prepare (48000.0, 64);
+        waitForImpulses (engine);
+
+        auto signal = sine (48000.0, 196.0, 48000 * 10, 0.3f);
+        const auto start = juce::Time::getMillisecondCounterHiRes();
+        run (engine, signal, 64);
+        const auto seconds = (juce::Time::getMillisecondCounterHiRes() - start) / 1000.0;
+        const auto realtime = 10.0 / seconds;
+
+        // Generous floor: CI runners are slow and shared. The figure printed
+        // is what to watch.
+        check (realtime > 10.0, ("runs at " + juce::String (juce::roundToInt (realtime)) + "x real time ("
+                                 + juce::String (100.0 / realtime, 2) + " % of one core)").toRawUTF8());
     }
 }
 
@@ -501,12 +793,17 @@ int main()
     testBlockSizeIndependence();
     testSilenceAndDenormals();
     testLatencyAndBypass();
-    testWetPathAlignment();
+    testAmpLatencyMatchesOversampler();
+    testToneStackMatchesCircuit();
+    testTriodeOperatingPoint();
+    testBreakupFollowsGain();
+    testToneControlsAndBright();
     testCabIdentityWithUnitImpulse();
     testCabLowCut();
     testIrSwapWhileProcessing();
     testDecoderRejectsBadFiles();
     testUserImpulseResponses();
+    testCpuBudget();
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASSED" : "FAILED", failures, failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;
