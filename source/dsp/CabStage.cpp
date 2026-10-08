@@ -19,7 +19,7 @@ namespace
         Normalising scales the IR to unit energy, so white noise passes at the
         same RMS through any IR. JUCE's own option leaves a fixed -18 dB on top
         of that, which made every cab sound much quieter than the amp alone.
-        IRs captured at different levels (Celestion's Lo-Gn and Hi-Gn sets)
+        IRs captured at different levels (low-gain and high-gain capture sets)
         then come out at the same loudness. */
     juce::AudioBuffer<float> prepareImpulse (juce::AudioBuffer<float> in, double sampleRate, bool normalise)
     {
