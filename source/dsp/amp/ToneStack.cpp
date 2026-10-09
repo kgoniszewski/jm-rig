@@ -44,46 +44,4 @@ ToneStack::Analog ToneStack::analogCoefficients (const Components& c, double tre
     return h;
 }
 
-void ToneStack::prepare (double sampleRate, const Components& c) noexcept
-{
-    parts = c;
-    twoFs = 2.0 * sampleRate;
-    setControls (0.5, 0.5, 0.5);
-    reset();
-}
-
-void ToneStack::reset() noexcept
-{
-    s1 = s2 = s3 = 0.0;
-}
-
-void ToneStack::setControls (double treble, double bass, double mid) noexcept
-{
-    const auto h = analogCoefficients (parts, treble, bass, mid);
-
-    // Bilinear transform, s = K (1 - z^-1) / (1 + z^-1), K = 2 fs.
-    const auto K = twoFs, K2 = K * K, K3 = K2 * K;
-
-    const auto bilinear = [&] (const std::array<double, 4>& p)
-    {
-        const auto c0 = p[0], c1 = p[1] * K, c2 = p[2] * K2, c3 = p[3] * K3;
-        return std::array<double, 4> {
-            c0 + c1 + c2 + c3,
-            3.0 * c0 + c1 - c2 - 3.0 * c3,
-            3.0 * c0 - c1 - c2 + 3.0 * c3,
-            c0 - c1 + c2 - c3,
-        };
-    };
-
-    const auto bd = bilinear (h.b);
-    const auto ad = bilinear (h.a);
-    const auto norm = 1.0 / ad[0];
-
-    for (size_t i = 0; i < 4; ++i)
-    {
-        b[i] = bd[i] * norm;
-        a[i] = ad[i] * norm;
-    }
-}
-
 } // namespace jmrig

@@ -406,30 +406,39 @@ namespace
         check (worstDb < 1.0e-6 && worstPhase < 1.0e-6,
                ("27 settings x 6 frequencies, worst error " + juce::String (worstDb, 9) + " dB").toRawUTF8());
 
-        // The digital filter at 4x oversampling follows the analog response.
-        jmrig::ToneStack stack;
-        stack.prepare (192000.0, parts);
-        stack.setControls (0.3, 0.6, 0.4);
+        // The amp's nodal network, wired as the bare tone stack (a stiff
+        // source, Gain full up so the 1M pot is the load, no grid capacitance),
+        // follows the closed form at 4x oversampling.
+        jmrig::Interstage::Parts bare;
+        bare.sourceOhms = 1.0;
+        bare.gridFarads = 1.0e-18;
+        jmrig::Interstage network;
+        network.prepare (192000.0, bare);
+        network.setControls (1.0, 0.3, 0.6, 0.4, 0.0);
+
+        jmrig::TriodeStage v1b; // grid never reaches the cathode at this level
+        v1b.design (jmrig::TriodeStage::Design {}, jmrig::TriodeStage::Tube {});
         const auto h = jmrig::ToneStack::analogCoefficients (parts, 0.3, 0.6, 0.4);
 
         for (auto hz : { 100.0, 1000.0, 5000.0 })
         {
-            stack.reset();
+            network.reset();
             double peakOut = 0.0;
 
             for (int i = 0; i < 192000; ++i)
             {
-                const auto y = stack.processSample ((float) std::sin (juce::MathConstants<double>::twoPi * hz * i / 192000.0));
+                const auto x = 0.5 * std::sin (juce::MathConstants<double>::twoPi * hz * i / 192000.0);
+                const auto y = network.processSample ((float) x, v1b);
 
                 if (i > 96000)
-                    peakOut = std::max (peakOut, (double) std::abs (y));
+                    peakOut = std::max (peakOut, (double) std::abs (y) * 2.0);
             }
 
             const std::complex<double> s (0.0, juce::MathConstants<double>::twoPi * hz);
             const auto analog = std::abs ((h.b[1] * s + h.b[2] * s * s + h.b[3] * s * s * s)
                                           / (h.a[0] + h.a[1] * s + h.a[2] * s * s + h.a[3] * s * s * s));
             const auto errDb = 20.0 * std::log10 (peakOut / analog);
-            check (std::abs (errDb) < 0.05, ("digital vs analog at " + juce::String (hz, 0) + " Hz: "
+            check (std::abs (errDb) < 0.05, ("nodal network vs closed form at " + juce::String (hz, 0) + " Hz: "
                                              + juce::String (errDb, 3) + " dB").toRawUTF8());
         }
     }
@@ -762,27 +771,67 @@ namespace
         }
     }
 
+    /** Seconds of audio processed per second of CPU, on this thread. */
+    double realtimeFactor (jmrig::RigEngine& engine, int blockSize)
+    {
+        auto signal = sine (48000.0, 196.0, 48000 * 10, 0.3f);
+        const auto start = juce::Time::getMillisecondCounterHiRes();
+        run (engine, signal, blockSize);
+        return 10.0 / ((juce::Time::getMillisecondCounterHiRes() - start) / 1000.0);
+    }
+
+    juce::String describeLoad (double realtime)
+    {
+        return juce::String (juce::roundToInt (realtime)) + "x real time ("
+             + juce::String (100.0 / realtime, 2) + " % of one core)";
+    }
+
     void testCpuBudget()
     {
-        std::puts ("CPU: whole rig, 48 kHz, 64-sample blocks");
+        std::puts ("CPU at 48 kHz (on Apple silicon CI this is the iPad's proxy)");
 
-        jmrig::RigEngine engine;
         jmrig::RigParameters p;
         p.ampGain = 8.0f;
+
+        {
+            jmrig::RigEngine engine;
+            p.cabOn = false;
+            engine.setParameters (p);
+            engine.prepare (48000.0, 64);
+            std::printf ("    amp alone, 64-sample blocks: %s\n", describeLoad (realtimeFactor (engine, 64)).toRawUTF8());
+        }
+
+        jmrig::RigEngine engine;
+        p.cabOn = true;
         engine.setParameters (p);
         engine.prepare (48000.0, 64);
         waitForImpulses (engine);
+        const auto typical = realtimeFactor (engine, 64);
+        std::printf ("    whole rig, 64-sample blocks: %s\n", describeLoad (typical).toRawUTF8());
 
-        auto signal = sine (48000.0, 196.0, 48000 * 10, 0.3f);
-        const auto start = juce::Time::getMillisecondCounterHiRes();
-        run (engine, signal, 64);
-        const auto seconds = (juce::Time::getMillisecondCounterHiRes() - start) / 1000.0;
-        const auto realtime = 10.0 / seconds;
+        // Worst case: Gain full, both IR slots blended with 0.5 s IRs (the
+        // longest the cab keeps), 32-sample blocks.
+        juce::AudioBuffer<float> longIr (1, 24000);
+        juce::Random random (1);
 
-        // Generous floor: CI runners are slow and shared. The figure printed
-        // is what to watch.
-        check (realtime > 10.0, ("runs at " + juce::String (juce::roundToInt (realtime)) + "x real time ("
-                                 + juce::String (100.0 / realtime, 2) + " % of one core)").toRawUTF8());
+        for (int i = 0; i < longIr.getNumSamples(); ++i)
+            longIr.setSample (0, i, (random.nextFloat() * 2.0f - 1.0f) * std::exp (-6.0f * (float) i / 24000.0f));
+
+        jmrig::RigEngine worst;
+        p.ampGain = 10.0f;
+        p.cabBlend = 0.5f;
+        worst.setParameters (p);
+        worst.prepare (48000.0, 32);
+        worst.loadImpulseResponse (jmrig::CabStage::Slot::a, longIr, 48000.0, true);
+        worst.loadImpulseResponse (jmrig::CabStage::Slot::b, longIr, 48000.0, true);
+        waitForImpulses (worst, 24000);
+        const auto heavy = realtimeFactor (worst, 32);
+        std::printf ("    worst case, 32-sample blocks, two 0.5 s IRs: %s\n", describeLoad (heavy).toRawUTF8());
+
+        // Generous floors: CI runners are slow and shared. The figures printed
+        // are what to watch.
+        check (typical > 10.0, ("whole rig: " + describeLoad (typical)).toRawUTF8());
+        check (heavy > 5.0, ("worst case: " + describeLoad (heavy)).toRawUTF8());
     }
 }
 

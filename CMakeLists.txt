@@ -31,6 +31,8 @@ target_sources(jmrig_dsp
         ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/AmpStage.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/CabStage.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/amp/PowerAmp.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/amp/Interstage.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/amp/Preamp.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/amp/ToneStack.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/source/dsp/amp/TriodeStage.cpp)
 
@@ -106,6 +108,19 @@ if(JMRIG_BUILD_TESTS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
             juce::juce_recommended_config_flags
             juce::juce_recommended_warning_flags)
 
+    # Null tests against SPICE; reference data from tools/spice/generate.py.
+    juce_add_console_app(JMRigSpiceTests PRODUCT_NAME "JMRigSpiceTests")
+    target_sources(JMRigSpiceTests PRIVATE tests/SpiceNullTests.cpp)
+    target_compile_definitions(JMRigSpiceTests PRIVATE
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+        JMRIG_SPICE_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/spice")
+    target_link_libraries(JMRigSpiceTests
+        PRIVATE
+            jmrig_dsp
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_warning_flags)
+
     enable_testing()
     add_test(NAME engine COMMAND JMRigTests)
+    add_test(NAME spice-null COMMAND JMRigSpiceTests)
 endif()

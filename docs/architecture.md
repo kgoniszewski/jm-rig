@@ -54,22 +54,54 @@ V1B's plate, so clipping starts where it does in the circuit.
 
 | Stage | Model |
 |---|---|
-| Grid stopper + Miller capacitance | 1-pole low-pass, 18 kHz |
-| V1A, V1B (12AX7, Rp 100k, Rk 1.5k bypassed, B+ 250 V) | `TriodeStage`: Koren plate current, load line solved by bisection for 4097 grid voltages at startup, linear interpolation at run time. Grid conduction soft-limits positive Vgk. Operating point 170 V plate, 1.2 V cathode, gain 61 |
-| Coupling caps | DC blockers |
-| Tone stack | `ToneStack`: exact third-order transfer function of the netlist (coefficients derived symbolically, verified in tests against a numeric nodal solve to 1e-9 dB), bilinear transform, recomputed every 32 samples while knobs move |
-| Gain pot (1M audio taper) + 120 pF bright cap | Exact first-order divider; the bright lift fades as the pot opens, as on the amp |
+| Grid stopper (68k) + V1A's Miller capacitance | One trapezoidal node, with V1A's grid current solved against it |
+| V1A, V1B (12AX7, Rp 100k, Rk 1.5k bypassed, B+ 250 V) | `TriodeStage`: Koren plate current from plate-to-cathode volts, load line solved by bisection for 4097 grid voltages at startup, linear interpolation at run time. Operating point 170.1 V plate, 1.20 V cathode, gain 61 |
+| Grid conduction | Koren's diode behind 2k, tabulated; `solveGrid()` finds the grid voltage against whatever drives it, so the driving circuit takes the current |
+| Tone stack, Gain pot (1M audio) + 120 pF bright cap, V1B's Miller capacitance | `Interstage`: one nodal circuit driven by V1A's output resistance (rp ‖ Rp), capacitors discretised with the trapezoidal rule, matrix inverse recomputed every 32 samples while knobs move. V1B's grid current is a one-variable solve against the inverse |
+| Coupling cap into the next grid | DC blocker at the RC corner, plus V1B's loading |
 | Phase inverter, output pair, transformer, feedback | `PowerAmp`: symmetric soft clip scaled by sag headroom (8 ms attack, 180 ms recovery, up to 2.5 dB), presence shelf (0 to +8 dB at 3.5 kHz), speaker resonance shelf (+2.5 dB at 90 Hz), 35 Hz transformer high-pass |
 
 Coefficient math is allocation-free: JUCE's IIR coefficient factories
-allocate, so `amp/Filters.h` has small first-order and shelf sections.
+allocate, so `amp/Filters.h` has small first-order and shelf sections, and
+`Interstage` inverts its 7x7 matrix in place.
 
 The tone stack values are an ODS-style stack as commonly published by clone
 builders (250k treble, 1M bass, 25k mid, 100k slope, 250 pF, 22 nF, 22 nF),
-voiced rather than measured. Step 4 compares the whole amp against SPICE.
+voiced rather than measured. `ToneStack` keeps the stack's exact closed-form
+transfer function as a reference the nodal network is tested against.
 
 On this CI-class x86 container, the whole rig (amp, both IR slots, filters)
-runs at about 40x real time at 48 kHz with 64-sample blocks (`testCpuBudget`).
+runs at about 27x real time at 48 kHz with 64-sample blocks, and 21x in the
+worst case (Gain 10, two 0.5 s IRs, 32-sample blocks); see `testCpuBudget`.
+
+### SPICE null tests
+
+`tools/spice/generate.py` renders the preamp in ngspice as it is wired on the
+chassis: Koren's 12AX7 models with grid diode and interelectrode capacitances,
+self-biased stages with 22 µF bypass caps, the tone stack, Gain pot and bright
+cap. `tests/SpiceNullTests.cpp` (`JMRigSpiceTests`) drives the plugin's
+`Preamp` with the same signals.
+
+| Check | Result |
+|---|---|
+| Triode operating point and DC transfer, -8 to +1 V grid | within 7 mV |
+| Tone stack alone, 329 points | within 0.0001 dB |
+| Whole preamp, small signal, 8 knob settings, 100 Hz to 6.4 kHz | within 0.35 dB |
+| Whole preamp, 200 Hz, up to 1 V at the jack | nulls -21 to -25 dB, harmonics within a few dB |
+| Whole preamp, 2 V at the jack, Gain 10 | null -13 dB |
+
+What the first version got wrong, and these tests caught: the load line used
+plate-to-ground instead of plate-to-cathode volts (0.4 V off at the operating
+point); the stages were treated as unloaded, which read 2.5 dB loud and up to
+8 dB too bright at Gain 8 (V1B's Miller capacitance against the Gain pot's
+resistance); and grid conduction was a fixed soft limit, which left heavy
+breakup 15 dB short on even harmonics.
+
+What is still simplified: V1A drives the tone stack as a Thevenin source
+(its open-circuit swing behind its small-signal output resistance), so its
+own clipping against the real load shows in the 2 V case; the cathodes are
+held at their quiescent voltage (SPICE says bias shift barely changes the
+harmonics here); and Miller capacitance uses the small-signal gain.
 
 ## Cab
 

@@ -7,9 +7,6 @@ namespace
 {
     constexpr double smoothingSeconds = 0.03;
 
-    constexpr double gainPotOhms   = 1.0e6;
-    constexpr double brightCapFarads = 120.0e-12;
-
     // V1B's plate swing (volts) that drives the output pair to the onset of
     // clipping with Master at full; and the final output scaling.
     constexpr float powerAmpVoltsAtClip = 12.0f;
@@ -34,13 +31,7 @@ double AmpStage::audioTaper (double knob) noexcept
     return (std::pow (10.0, 2.0 * x) - 1.0) / 99.0;
 }
 
-AmpStage::AmpStage() : oversampling (makeOversampler())
-{
-    // Tube stages are designed once; they don't depend on the sample rate.
-    TriodeStage::Design stage;
-    v1a.design (stage, TriodeStage::Tube {});
-    v1b.design (stage, TriodeStage::Tube {});
-}
+AmpStage::AmpStage() : oversampling (makeOversampler()) {}
 
 void AmpStage::prepare (double sampleRate, int maxBlockSize)
 {
@@ -48,10 +39,7 @@ void AmpStage::prepare (double sampleRate, int maxBlockSize)
     oversampling->initProcessing ((size_t) maxBlockSize);
     osRate = sampleRate * getOversamplingFactor();
 
-    millerLowPass.setLowPass (18000.0, osRate);
-    couplingA.prepare (osRate);
-    couplingB.prepare (osRate);
-    toneStack.prepare (osRate, ToneStack::Components {});
+    preamp.prepare (osRate);
     powerAmp.prepare (osRate);
 
     for (auto* v : { &gain, &treble, &bass, &mid, &presence, &bright })
@@ -71,11 +59,7 @@ void AmpStage::reset() noexcept
 
     master.setCurrentAndTargetValue (master.getTargetValue());
 
-    millerLowPass.reset();
-    gainPot.reset();
-    couplingA.reset();
-    couplingB.reset();
-    toneStack.reset();
+    preamp.reset();
     powerAmp.reset();
 
     samplesUntilUpdate = 0;
@@ -113,16 +97,9 @@ void AmpStage::process (float* data, int numSamples) noexcept
 
 void AmpStage::updateControls() noexcept
 {
-    toneStack.setControls (treble.getCurrentValue(), bass.getCurrentValue(), mid.getCurrentValue());
+    preamp.setControls (gain.getCurrentValue(), treble.getCurrentValue(), bass.getCurrentValue(),
+                        mid.getCurrentValue(), bright.getCurrentValue());
     powerAmp.setPresence (presence.getCurrentValue());
-
-    // Gain pot as a divider, lower leg Rl to V1B's grid, upper leg Ru, with
-    // the bright cap across Ru: H(s) = Rl (1 + s Ru C) / (Ru + Rl + s Ru Rl C).
-    // The bright cap's effect fades as the pot opens up, as on the real amp.
-    const auto rl = (double) gain.getCurrentValue() * gainPotOhms;
-    const auto ru = gainPotOhms - rl;
-    const auto c = (double) bright.getCurrentValue() * brightCapFarads;
-    gainPot.setAnalog (rl, rl * ru * c, ru + rl, ru * rl * c, osRate);
 }
 
 void AmpStage::processOversampled (float* data, int numSamples) noexcept
@@ -138,12 +115,7 @@ void AmpStage::processOversampled (float* data, int numSamples) noexcept
             samplesUntilUpdate = controlInterval;
         }
 
-        auto v = millerLowPass.processSample (data[i]);    // volts at V1A's grid
-        v = couplingA.processSample (v1a.processSample (v));
-        v = toneStack.processSample (v);
-        v = gainPot.processSample (v);
-        v = couplingB.processSample (v1b.processSample (v));
-
+        const auto v = preamp.processSample (data[i]); // volts at V1B's plate
         const auto drive = v * master.getNextValue() / powerAmpVoltsAtClip;
         data[i] = powerAmp.processSample (drive) * outputScale;
     }
