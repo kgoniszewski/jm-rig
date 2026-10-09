@@ -29,6 +29,16 @@ input gain -> DC block -> amp (4x oversampled) -> cab -> output gain
 dry, delayed by the reported latency -------------- bypass crossfade
 ```
 
+## Interface
+
+![JM Rig editor](docs/images/editor.png)
+
+One screen, laid out for an iPad in landscape and scaled to fit any window or
+AUv3 host. Drag a knob up/down or sideways to turn it, and double-tap it to
+return to the default. While you turn it, the caption under the knob shows its
+value, since your finger covers the pointer. Every control is at least 44 pt,
+Apple's minimum touch target, at the smallest window size.
+
 ## Roadmap
 
 1. **Skeleton** (done): CMake project, headless engine, AU/AUv3/Standalone, CI.

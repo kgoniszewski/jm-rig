@@ -77,7 +77,8 @@ target_sources(JMRig
     PRIVATE
         source/plugin/ParameterLayout.cpp
         source/plugin/PluginProcessor.cpp
-        source/plugin/PluginEditor.cpp)
+        source/plugin/PluginEditor.cpp
+        source/plugin/RigLookAndFeel.cpp)
 
 target_compile_definitions(JMRig
     PUBLIC

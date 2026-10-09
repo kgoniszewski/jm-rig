@@ -5,30 +5,20 @@ namespace jmrig
 
 namespace
 {
-    constexpr int baseWidth = 880, baseHeight = 600;
+    // Design grid. Everything is laid out in these units and scaled.
+    constexpr float gridWidth = 1000.0f, gridHeight = 700.0f;
 
-    const juce::Colour background { 0xff17171a };
-    const juce::Colour panel      { 0xff26201a }; // dark tolex brown
-    const juce::Colour panelEdge  { 0xff8a7350 }; // gold piping
-    const juce::Colour text       { 0xffe9e2d4 };
-    const juce::Colour accent     { 0xffd9a441 };
+    // Window sizes on the desktop; hosts on iPadOS pick their own. The
+    // smallest is 0.8 scale, where the smallest control is still 44 pt.
+    constexpr int defaultWidth = 1000, defaultHeight = 700;
+    constexpr int minimumWidth = 800, minimumHeight = 560;
 }
 
 PluginEditor::PluginEditor (PluginProcessor& p)
     : AudioProcessorEditor (p), processor (p)
 {
-    lookAndFeel.setColour (juce::Slider::rotarySliderFillColourId, accent);
-    lookAndFeel.setColour (juce::Slider::rotarySliderOutlineColourId, juce::Colour (0xff3c352c));
-    lookAndFeel.setColour (juce::Slider::thumbColourId, text);
-    lookAndFeel.setColour (juce::Label::textColourId, text);
-    lookAndFeel.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff3c352c));
-    lookAndFeel.setColour (juce::TextButton::buttonOnColourId, accent);
-    lookAndFeel.setColour (juce::TextButton::textColourOffId, text);
-    lookAndFeel.setColour (juce::TextButton::textColourOnId, background);
     setLookAndFeel (&lookAndFeel);
-
-    addKnob (input,  ParamIDs::inputGain,  "Input");
-    addKnob (output, ParamIDs::outputGain, "Output");
+    auto& state = processor.getValueTreeState();
 
     const std::array<std::pair<const char*, const char*>, 6> amp {{
         { ParamIDs::ampGain,     "Gain" },
@@ -39,16 +29,26 @@ PluginEditor::PluginEditor (PluginProcessor& p)
         { ParamIDs::ampMaster,   "Master" },
     }};
 
-    for (size_t i = 0; i < amp.size(); ++i)
-        addKnob (ampKnobs[i], amp[i].first, amp[i].second);
+    for (const auto& [id, name] : amp)
+        addAndMakeVisible (*ampKnobs.emplace_back (std::make_unique<RigKnob> (state, id, name, true)));
 
-    addKnob (cabKnobs[0], ParamIDs::cabBlend,   "IR Blend");
-    addKnob (cabKnobs[1], ParamIDs::cabLowCut,  "Low Cut");
-    addKnob (cabKnobs[2], ParamIDs::cabHighCut, "High Cut");
+    const std::array<std::pair<const char*, const char*>, 3> cab {{
+        { ParamIDs::cabBlend,   "A / B" },
+        { ParamIDs::cabLowCut,  "Low Cut" },
+        { ParamIDs::cabHighCut, "High Cut" },
+    }};
+
+    for (const auto& [id, name] : cab)
+        addAndMakeVisible (*cabKnobs.emplace_back (std::make_unique<RigKnob> (state, id, name, false)));
+
+    input  = std::make_unique<RigKnob> (state, ParamIDs::inputGain,  "Input",  false);
+    output = std::make_unique<RigKnob> (state, ParamIDs::outputGain, "Output", false);
+    addAndMakeVisible (*input);
+    addAndMakeVisible (*output);
 
     addToggle (bright, ParamIDs::ampBright, "Bright");
     addToggle (bypass, ParamIDs::bypass,    "Bypass");
-    addToggle (cabOn,  ParamIDs::cabOn,     "Cab");
+    addToggle (cabOn,  ParamIDs::cabOn,     "Cab On");
 
     setUpIrSlot (irA);
     setUpIrSlot (irB);
@@ -56,9 +56,9 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     startTimerHz (4); // names can change from session recall, not just from here
 
     setResizable (true, true);
-    setResizeLimits (baseWidth / 2, baseHeight / 2, baseWidth * 2, baseHeight * 2);
-    getConstrainer()->setFixedAspectRatio ((double) baseWidth / baseHeight);
-    setSize (baseWidth, baseHeight);
+    setResizeLimits (minimumWidth, minimumHeight, defaultWidth * 2, defaultHeight * 2);
+    getConstrainer()->setFixedAspectRatio ((double) gridWidth / gridHeight);
+    setSize (defaultWidth, defaultHeight);
 }
 
 PluginEditor::~PluginEditor()
@@ -67,26 +67,11 @@ PluginEditor::~PluginEditor()
     setLookAndFeel (nullptr);
 }
 
-void PluginEditor::addKnob (Knob& k, const char* paramID, const juce::String& labelText)
-{
-    k.slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    k.slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 64, 20);
-    k.slider.setVelocityBasedMode (false);
-    k.slider.setMouseDragSensitivity (220);
-    addAndMakeVisible (k.slider);
-
-    k.label.setText (labelText, juce::dontSendNotification);
-    k.label.setJustificationType (juce::Justification::centred);
-    addAndMakeVisible (k.label);
-
-    k.attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-        processor.getValueTreeState(), paramID, k.slider);
-}
-
 void PluginEditor::addToggle (Toggle& t, const char* paramID, const juce::String& labelText)
 {
     t.button.setButtonText (labelText);
     t.button.setClickingTogglesState (true);
+    t.button.getProperties().set (RigLookAndFeel::hasLed, true);
     addAndMakeVisible (t.button);
 
     t.attachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
@@ -146,7 +131,7 @@ void PluginEditor::refreshIrNames()
     for (auto* c : { &irA, &irB })
     {
         const auto name = processor.getImpulseResponseName (c->slot);
-        const auto textToShow = c->title + ": " + (name.isNotEmpty() ? name : juce::String ("Built-in cab"));
+        const auto textToShow = c->title + ":  " + (name.isNotEmpty() ? name : juce::String ("Built-in cab"));
 
         if (c->load.getButtonText() != textToShow)
             c->load.setButtonText (textToShow);
@@ -155,80 +140,120 @@ void PluginEditor::refreshIrNames()
     }
 }
 
+juce::Rectangle<float> PluginEditor::contentArea() const
+{
+    auto bounds = getLocalBounds().toFloat();
+
+   #if JUCE_IOS
+    // Full-screen app: keep clear of the rounded corners and the home bar.
+    if (processor.wrapperType == juce::AudioProcessor::wrapperType_Standalone)
+        if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+            bounds = display->safeAreaInsets.subtractedFrom (bounds);
+   #endif
+
+    const auto s = juce::jmin (bounds.getWidth() / gridWidth, bounds.getHeight() / gridHeight);
+    return juce::Rectangle<float> (gridWidth * s, gridHeight * s).withCentre (bounds.getCentre());
+}
+
 void PluginEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (background);
+    g.fillAll (Palette::background);
 
-    const auto scale = (float) getWidth() / baseWidth;
+    // Faceplate: tolex brown with gold piping.
+    const auto corner = 14.0f * scale;
+    g.setGradientFill (juce::ColourGradient (Palette::faceplateHi, faceplate.getX(), faceplate.getY(),
+                                             Palette::faceplate, faceplate.getX(), faceplate.getBottom(), false));
+    g.fillRoundedRectangle (faceplate, corner);
 
-    for (auto r : { ampPanel, cabPanel })
     {
-        g.setColour (panel);
-        g.fillRoundedRectangle (r, 10.0f * scale);
-        g.setColour (panelEdge);
-        g.drawRoundedRectangle (r, 10.0f * scale, 2.0f * scale);
+        // A faint diagonal weave, like vinyl tolex.
+        juce::Graphics::ScopedSaveState save (g);
+        juce::Path clip;
+        clip.addRoundedRectangle (faceplate, corner);
+        g.reduceClipRegion (clip);
+        g.setColour (juce::Colours::black.withAlpha (0.08f));
+        const auto step = 6.0f * scale;
+
+        for (auto x = faceplate.getX() - faceplate.getHeight(); x < faceplate.getRight(); x += step)
+            g.drawLine (x, faceplate.getBottom(), x + faceplate.getHeight(), faceplate.getY(), 1.0f);
     }
 
-    g.setColour (text);
-    g.setFont (juce::FontOptions (22.0f * scale, juce::Font::bold));
-    g.drawText ("JM RIG", getLocalBounds().removeFromTop (juce::roundToInt (48 * scale)),
-                juce::Justification::centred);
+    g.setColour (Palette::piping);
+    g.drawRoundedRectangle (faceplate.reduced (6.0f * scale), corner * 0.7f, 2.0f * scale);
+
+    // Cab panel.
+    g.setColour (Palette::cabPanel);
+    g.fillRoundedRectangle (cabPanel, corner);
+    g.setColour (Palette::piping.withAlpha (0.35f));
+    g.drawRoundedRectangle (cabPanel, corner, 1.2f * scale);
+
+    g.setColour (Palette::textDim);
+    g.setFont (juce::FontOptions (13.0f * scale, juce::Font::bold));
+    g.drawText ("CAB", cabPanel.withHeight (34.0f * scale).reduced (20.0f * scale, 0.0f),
+                juce::Justification::centredLeft, false);
+
+    // Wordmark.
+    g.setColour (Palette::accent);
+    g.setFont (juce::FontOptions (34.0f * scale, juce::Font::bold));
+    g.drawText ("JM RIG", logo, juce::Justification::centredLeft, false);
+    g.setColour (Palette::textDim);
+    g.setFont (juce::FontOptions (13.0f * scale));
+    g.drawText (juce::String::fromUTF8 ("CLEAN AMP  \xc2\xb7  CAB"), logo.withTrimmedLeft (150.0f * scale), juce::Justification::centredLeft, false);
 }
 
 void PluginEditor::resized()
 {
-    const auto scale = (float) getWidth() / baseWidth;
-    const auto s = [scale] (int v) { return juce::roundToInt ((float) v * scale); };
+    const auto content = contentArea();
+    scale = content.getWidth() / gridWidth;
 
-    auto area = getLocalBounds().reduced (s (16));
-    area.removeFromTop (s (40));
-
-    auto footer = area.removeFromBottom (s (52));
-    bypass.button.setBounds (footer.removeFromRight (s (120)).reduced (s (4)));
-    bright.button.setBounds (footer.removeFromRight (s (120)).reduced (s (4)));
-
-    const auto placeKnob = [&] (Knob& k, juce::Rectangle<int> r)
+    // Design-grid rectangle to window pixels.
+    const auto grid = [&] (float x, float y, float w, float h)
     {
-        k.label.setFont (juce::FontOptions (15.0f * scale));
-        k.label.setBounds (r.removeFromTop (s (24)));
-        k.slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, s (72), s (20));
-        k.slider.setBounds (r);
+        return juce::Rectangle<float> (content.getX() + x * scale, content.getY() + y * scale, w * scale, h * scale);
     };
+    const auto place = [] (juce::Component& c, juce::Rectangle<float> r) { c.setBounds (r.toNearestInt()); };
 
-    // Amp row: Input | amp knobs | Output.
-    auto ampRow = area.removeFromTop (s (260));
-    const auto sideWidth = s (110);
-    placeKnob (input,  ampRow.removeFromLeft (sideWidth).reduced (s (6)));
-    placeKnob (output, ampRow.removeFromRight (sideWidth).reduced (s (6)));
+    // Header: wordmark, bypass.
+    logo = grid (28, 18, 600, 60);
+    place (bypass.button, grid (836, 22, 140, 56));
 
-    ampPanel = ampRow.reduced (s (8)).toFloat();
-    auto knobs = ampRow.reduced (s (20));
-    const auto knobWidth = knobs.getWidth() / (int) ampKnobs.size();
+    // Faceplate: six amp knobs and the bright switch.
+    faceplate = grid (20, 92, 960, 260);
+    const auto knobWidth = 128.0f;
+    auto x = 44.0f;
 
     for (auto& k : ampKnobs)
-        placeKnob (k, knobs.removeFromLeft (knobWidth).reduced (s (4)));
+    {
+        place (*k, grid (x, 137, knobWidth, 170));
+        x += knobWidth;
+    }
 
-    // Cab row: IR slots | blend, low cut, high cut | on/off.
-    area.removeFromTop (s (8));
-    cabPanel = area.reduced (s (8), s (4)).toFloat();
-    auto cabRow = area.reduced (s (20), s (12));
+    place (bright.button, grid (x + 12, 179, 116, 56));
 
-    auto slots = cabRow.removeFromLeft (s (300));
-    const auto slotHeight = slots.getHeight() / 2;
+    // Bottom row: input, cab, output.
+    place (*input,  grid (20,  400, 140, 210));
+    place (*output, grid (840, 400, 140, 210));
+
+    cabPanel = grid (176, 372, 648, 280);
+
+    auto y = 410.0f;
 
     for (auto* c : { &irA, &irB })
     {
-        auto r = slots.removeFromTop (slotHeight).withSizeKeepingCentre (slots.getWidth(), s (48));
-        c->reset.setBounds (r.removeFromRight (s (48)).reduced (s (2)));
-        c->load.setBounds (r.reduced (s (2)));
+        place (c->load,  grid (196, y, 248, 56));
+        place (c->reset, grid (450, y, 56, 56));
+        y += 66.0f;
     }
 
-    cabOn.button.setBounds (cabRow.removeFromRight (s (100)).withSizeKeepingCentre (s (88), s (48)));
+    place (cabOn.button, grid (196, y, 140, 56));
 
-    const auto cabKnobWidth = cabRow.getWidth() / (int) cabKnobs.size();
+    x = 520.0f;
 
     for (auto& k : cabKnobs)
-        placeKnob (k, cabRow.removeFromLeft (cabKnobWidth).reduced (s (4)));
+    {
+        place (*k, grid (x, 418, 96, 170));
+        x += 98.0f;
+    }
 }
 
 } // namespace jmrig
