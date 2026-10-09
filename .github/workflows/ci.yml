@@ -34,7 +34,7 @@ jobs:
         run: cmake --build build --target JMRigTests JMRigSpiceTests JMRig_Standalone -j4
 
       - name: Engine tests
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --verbose
 
   macos:
     name: macOS (AU, AUv3, Standalone, universal)
@@ -53,7 +53,7 @@ jobs:
       - name: Build and run engine tests
         run: |
           cmake --build build --config Release --target JMRigTests JMRigSpiceTests -- CODE_SIGNING_ALLOWED=NO
-          ctest --test-dir build -C Release --output-on-failure
+          ctest --test-dir build -C Release --verbose
 
       - name: Check binaries are universal
         run: |
