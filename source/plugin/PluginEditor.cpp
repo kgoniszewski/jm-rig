@@ -142,14 +142,16 @@ void PluginEditor::refreshIrNames()
 
 juce::Rectangle<float> PluginEditor::contentArea() const
 {
-    auto bounds = getLocalBounds().toFloat();
+    auto area = getLocalBounds();
 
    #if JUCE_IOS
     // Full-screen app: keep clear of the rounded corners and the home bar.
     if (processor.wrapperType == juce::AudioProcessor::wrapperType_Standalone)
         if (const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
-            bounds = display->safeAreaInsets.subtractedFrom (bounds);
+            area = display->safeAreaInsets.subtractedFrom (area);
    #endif
+
+    const auto bounds = area.toFloat();
 
     const auto s = juce::jmin (bounds.getWidth() / gridWidth, bounds.getHeight() / gridHeight);
     return juce::Rectangle<float> (gridWidth * s, gridHeight * s).withCentre (bounds.getCentre());
