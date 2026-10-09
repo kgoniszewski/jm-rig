@@ -20,11 +20,12 @@ namespace jmrig
 
     Nodal analysis of this network gives a third-order transfer function
     whose coefficients are polynomials in the pot resistances (derived
-    symbolically; the test suite checks them against a numeric nodal solve).
-    The bilinear transform turns it into a digital filter. For a linear
-    passive network this is exactly what a wave digital filter computes, at
-    a fraction of the cost, and the coefficients are cheap enough to update
-    every few samples while a knob turns.
+    symbolically; the test suite checks them against a numeric nodal solve
+    and against SPICE).
+
+    The amp itself runs the stack inside Interstage, together with the parts
+    that load it; this closed form is the reference that network is tested
+    against.
 
     Default values are a Dumble ODS-style stack as commonly published by
     clone builders, voiced rather than measured from a specific amp. */
@@ -51,30 +52,6 @@ public:
 
     /** Pot positions are electrical fractions, 0..1 (after the pot's taper). */
     static Analog analogCoefficients (const Components&, double treble, double bass, double mid) noexcept;
-
-    void prepare (double sampleRate, const Components&) noexcept;
-    void reset() noexcept;
-
-    /** Real-time safe: no allocation. */
-    void setControls (double treble, double bass, double mid) noexcept;
-
-    float processSample (float x) noexcept
-    {
-        // Transposed direct form II, double precision: a third-order section
-        // with poles near DC at a 4x oversampled rate needs the headroom.
-        const auto in = (double) x;
-        const auto y = b[0] * in + s1;
-        s1 = b[1] * in - a[1] * y + s2;
-        s2 = b[2] * in - a[2] * y + s3;
-        s3 = b[3] * in - a[3] * y;
-        return (float) y;
-    }
-
-private:
-    Components parts;
-    double twoFs = 96000.0;
-    std::array<double, 4> b {}, a {};
-    double s1 = 0.0, s2 = 0.0, s3 = 0.0;
 };
 
 } // namespace jmrig

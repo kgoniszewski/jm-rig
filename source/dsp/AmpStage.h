@@ -1,11 +1,8 @@
 #pragma once
 
 #include <juce_dsp/juce_dsp.h>
-#include "amp/Filters.h"
 #include "amp/PowerAmp.h"
-#include "amp/ToneStack.h"
-#include "amp/TriodeStage.h"
-#include "DcBlocker.h"
+#include "amp/Preamp.h"
 #include "RigParameters.h"
 
 namespace jmrig
@@ -14,13 +11,8 @@ namespace jmrig
 /** The amp: a high-headroom, Dumble/Two-Rock-style clean channel, modelled
     stage by stage from the circuit. Everything inside runs 4x oversampled.
 
-        grid stopper + Miller cap        1-pole low-pass, ~18 kHz
-        V1A  12AX7, Rp 100k, Rk 1.5k     load-line table (TriodeStage)
-        coupling cap                     DC blocker
-        tone stack (bass, mid, treble)   exact 3rd-order circuit (ToneStack)
-        Gain pot (1M audio) + bright cap exact 1st-order divider
-        V1B  12AX7                       load-line table
-        coupling cap                     DC blocker
+        Preamp (V1A, tone stack, Gain    see Preamp.h; checked against
+          pot + bright, V1B)             SPICE in tests/SpiceNullTests.cpp
         Master                           attenuation
         PI + push-pull + OT + NFB        PowerAmp (sag, presence, resonance)
 
@@ -63,10 +55,7 @@ private:
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
     double osRate = 192000.0;
 
-    FirstOrder millerLowPass, gainPot;
-    TriodeStage v1a, v1b;
-    DcBlocker couplingA, couplingB;
-    ToneStack toneStack;
+    Preamp preamp;
     PowerAmp powerAmp;
 
     // Controls that recompute coefficients are updated every controlInterval

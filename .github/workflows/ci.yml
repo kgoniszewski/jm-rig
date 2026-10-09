@@ -31,7 +31,7 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
-        run: cmake --build build --target JMRigTests JMRig_Standalone -j4
+        run: cmake --build build --target JMRigTests JMRigSpiceTests JMRig_Standalone -j4
 
       - name: Engine tests
         run: ctest --test-dir build --output-on-failure
@@ -52,7 +52,7 @@ jobs:
 
       - name: Build and run engine tests
         run: |
-          cmake --build build --config Release --target JMRigTests -- CODE_SIGNING_ALLOWED=NO
+          cmake --build build --config Release --target JMRigTests JMRigSpiceTests -- CODE_SIGNING_ALLOWED=NO
           ctest --test-dir build -C Release --output-on-failure
 
       - name: Check binaries are universal
